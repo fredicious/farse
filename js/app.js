@@ -93,9 +93,10 @@
     const bottom = p
       ? `<div class="show-loc">📍 ${esc(p.venue.name)}</div>${p.note ? `<div class="show-note">${esc(p.note)}</div>` : ""}`
       : `<div class="times-row">${timePills(show)}</div>`;
+    // pas de cœur sur les rencontres : le favori appartient au spectacle lui-même
     const actions = opts.removable
       ? `<button class="remove-x" data-unplan="${p.id}" aria-label="Retirer">✕</button>`
-      : `<button class="${favs.has(show.id) ? "on" : ""}" data-fav="${show.id}" aria-label="Favori">❤️</button>` +
+      : (p && p.kind === "rencontre" ? "" : `<button class="${favs.has(show.id) ? "on" : ""}" data-fav="${show.id}" aria-label="Favori">❤️</button>`) +
         (p ? `<button class="${plan.has(p.id) ? "on" : ""}" data-plan="${p.id}" aria-label="Mon parcours">➕</button>` : "");
     return `<article class="show-card${p ? " " + p.kind : ""}" data-show="${show.id}">
       ${img}
