@@ -100,38 +100,63 @@
 
   /* ---------- Vue : Spectacles ---------- */
   let searchQ = store.get("searchQ", "");
-  let filterChip = "all";
+  // filtres multi-sélection : OU à l'intérieur d'un groupe, ET entre groupes
+  const filters = { day: new Set(), group: new Set(), aud: new Set() };
+  const minAge = s => { const m = /(\d+)\s*ans/.exec(s.audience || ""); return m ? +m[1] : null; };
 
   function viewSpectacles(el) {
     const chips = [
-      ["all", "Tous"], ["ven", "Ven 28"], ["sam", "Sam 29"], ["dim", "Dim 30"],
-      ["danse", "Danse"], ["cirque", "Cirque"], ["theatre", "Théâtre"], ["musique", "Musique"], ["village", "Village"],
+      ["day:ven", "Ven 28"], ["day:sam", "Sam 29"], ["day:dim", "Dim 30"],
+      ["group:danse", "Danse"], ["group:cirque", "Cirque"], ["group:theatre", "Théâtre"], ["group:musique", "Musique"], ["group:village", "Village"],
+      ["aud:tp", "Tout public"], ["aud:3", "3+"], ["aud:5", "5+"], ["aud:6", "6+"], ["aud:7", "7+"], ["aud:10", "10+"], ["aud:12", "12+"],
     ];
+    const anyFilter = filters.day.size || filters.group.size || filters.aud.size;
     const q = norm(searchQ);
     const matches = s => {
       if (q && !(norm(s.title).includes(q) || norm(s.company).includes(q) || norm(s.genre).includes(q)
         || s.venueIds.some(v => norm(venueById[v].name).includes(q)))) return false;
-      if (filterChip === "all") return true;
-      if (dayById[filterChip]) return s.perfs.some(p => p.day === filterChip);
-      return s.group === filterChip;
+      if (filters.day.size && ![...filters.day].some(d => s.perfs.some(p => p.day === d))) return false;
+      if (filters.group.size && !filters.group.has(s.group)) return false;
+      if (filters.aud.size) {
+        const age = minAge(s);
+        const ok = (filters.aud.has("tp") && age == null) || (age != null && filters.aud.has(String(age)));
+        if (!ok) return false;
+      }
+      return true;
     };
     const main = SHOWS.filter(s => s.group !== "village" && matches(s));
     const village = SHOWS.filter(s => s.group === "village" && matches(s));
 
+    const chipsScroll = $(".chips", el)?.scrollLeft || 0;
     el.className = "view";
     el.innerHTML = `
       <h1 class="page">Spectacles</h1>
       <div class="searchbar">🔍<input id="search" type="search" placeholder="Chercher un spectacle, une compagnie, un lieu…" value="${esc(searchQ)}" autocomplete="off"></div>
-      <div class="chips">${chips.map(([id, l]) => `<button class="chip ${filterChip === id ? "on" : ""}" data-chip="${id}">${l}</button>`).join("")}</div>
+      <div class="chips">
+        <button class="chip ${anyFilter ? "" : "on"}" data-chip="all">Tous</button>
+        ${chips.map(([id, l]) => {
+          const [g, v] = id.split(":");
+          return `<button class="chip ${filters[g].has(v) ? "on" : ""}" data-chip="${id}">${l}</button>`;
+        }).join("")}
+      </div>
       ${main.map(showCard).join("") || (village.length ? "" : `<div class="empty"><span class="big">🫥</span>Aucun résultat pour cette recherche.</div>`)}
       ${village.length ? `<h2 class="section">Au Village du FARSe</h2>${village.map(showCard).join("")}` : ""}
     `;
+    $(".chips", el).scrollLeft = chipsScroll;
     $("#search", el).addEventListener("input", e => {
       searchQ = e.target.value; store.set("searchQ", searchQ);
       clearTimeout(viewSpectacles._t);
       viewSpectacles._t = setTimeout(() => { viewSpectacles(el); const i = $("#search", el); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 200);
     });
-    el.querySelectorAll("[data-chip]").forEach(b => b.addEventListener("click", () => { filterChip = b.dataset.chip; viewSpectacles(el); }));
+    el.querySelectorAll("[data-chip]").forEach(b => b.addEventListener("click", () => {
+      const id = b.dataset.chip;
+      if (id === "all") { filters.day.clear(); filters.group.clear(); filters.aud.clear(); }
+      else {
+        const [g, v] = id.split(":");
+        filters[g].has(v) ? filters[g].delete(v) : filters[g].add(v);
+      }
+      viewSpectacles(el);
+    }));
   }
 
   /* ---------- Battement entre deux étapes (temps de marche estimé) ---------- */
@@ -202,20 +227,21 @@
   }
 
   /* ---------- Vue : Programme ---------- */
+  const PROG_DAYS = DAYS.filter(d => !d.pre); // le jeudi (avant-première à Ostwald) reste visible sur la fiche Épiphytes
   let curDay = store.get("curDay", null) || (() => {
     const today = new Date().toISOString().slice(0, 10);
-    return (DAYS.find(d => d.date === today) || DAYS[1]).id;
+    return (PROG_DAYS.find(d => d.date === today) || PROG_DAYS[0]).id;
   })();
+  if (!PROG_DAYS.some(d => d.id === curDay)) curDay = PROG_DAYS[0].id;
 
   function viewProgramme(el) {
-    const day = dayById[curDay] || DAYS[1];
+    const day = dayById[curDay] || PROG_DAYS[0];
     const perfs = PERFS.filter(p => p.day === day.id).sort((a, b) => a.startMin - b.startMin);
     const today = new Date().toISOString().slice(0, 10);
     const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
 
     let html = `<h1 class="page">Programme</h1>
-      <div class="day-tabs">${DAYS.map(d => `<button class="day-tab ${d.id === curDay ? "on" : ""}" data-day="${d.id}">${d.short}${d.pre ? "*" : ""}</button>`).join("")}</div>`;
-    if (day.pre) html += `<p style="color:var(--muted);font-size:12.5px;margin:-6px 2px 12px">* Avant le FARSe — avant-première à Ostwald.</p>`;
+      <div class="day-tabs">${PROG_DAYS.map(d => `<button class="day-tab ${d.id === curDay ? "on" : ""}" data-day="${d.id}">${d.short}</button>`).join("")}</div>`;
 
     if (day.date === today) {
       const before = perfs.filter(p => p.startMin <= nowMin);
@@ -444,7 +470,6 @@
           <div class="facts">
             ${s.duration ? `<span class="fact">⏱ ${fmtDur(s.duration)}</span>` : ""}
             ${s.audience ? `<span class="fact">👥 ${esc(s.audience)}</span>` : ""}
-            <span class="fact">🎟 Gratuit</span>
           </div>
           ${alerts.map(u => `<div class="alert-box ${u.type}">${u.type === "cancel" ? "🚫" : u.type === "delay" ? "⏳" : "📣"} <b>${esc(u.title)}</b>${u.body ? `<br>${esc(u.body)}` : ""}</div>`).join("")}
           <h2 class="section">Horaires</h2>
@@ -622,7 +647,7 @@
 
   /* ---------- Router ---------- */
   const VIEWS = { spectacles: viewSpectacles, programme: viewProgramme, carte: viewCarte, monfarse: viewMonFarse, infos: viewInfos };
-  let baseRoute = "spectacles";
+  let baseRoute = "programme";
 
   function closeSheet() {
     $("#sheet-root").innerHTML = "";
@@ -638,7 +663,7 @@
     else if (seg === "parcours" && arg) { ensureBase(); openParcours(arg); }
     else if (seg === "updates") { ensureBase(); openUpdates(); }
     else {
-      baseRoute = VIEWS[seg] ? seg : "spectacles";
+      baseRoute = VIEWS[seg] ? seg : "programme";
       renderBase();
     }
     document.querySelectorAll(".tabbar a").forEach(a => a.classList.toggle("active", a.dataset.tab === baseRoute));
@@ -683,7 +708,7 @@
 
   /* ---------- Init ---------- */
   window.addEventListener("hashchange", route);
-  if (!location.hash) location.replace("#/spectacles");
+  if (!location.hash) location.replace("#/programme");
   route();
   refreshBadge();
   fetchUpdates();
