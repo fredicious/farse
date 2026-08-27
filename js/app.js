@@ -134,6 +134,28 @@
     el.querySelectorAll("[data-chip]").forEach(b => b.addEventListener("click", () => { filterChip = b.dataset.chip; viewSpectacles(el); }));
   }
 
+  /* ---------- Battement entre deux étapes (temps de marche estimé) ---------- */
+  const fmtMin = m => `${String(Math.floor(m / 60)).padStart(2, "0")}h${String(m % 60).padStart(2, "0")}`;
+  const walkMin = (a, b) => {
+    if (!a || !b || a.id === b.id) return 0;
+    const rad = x => x * Math.PI / 180;
+    const h = Math.sin(rad(b.lat - a.lat) / 2) ** 2 +
+      Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(rad(b.lng - a.lng) / 2) ** 2;
+    const dist = 2 * 6371e3 * Math.asin(Math.sqrt(h)) * 1.35; // facteur voirie (on ne marche pas à vol d'oiseau)
+    return Math.max(1, Math.round(dist / 75)); // ~4,5 km/h
+  };
+  function gapHTML(prevEnd, nextStart, vA, vB) {
+    if (prevEnd == null || nextStart == null) return "";
+    const gap = nextStart - prevEnd;
+    if (gap < 0) return `<div class="tl-gap bad">⚠️ Chevauchement de ${-gap} min</div>`;
+    const walk = walkMin(vA, vB);
+    if (!walk) return `<div class="tl-gap ok">⏱ ${gap} min de battement · même lieu</div>`;
+    const slack = gap - walk;
+    const leaveBy = fmtMin(nextStart - walk);
+    if (slack < 0) return `<div class="tl-gap bad">⚠️ Trop court : ~${walk} min à pied pour ${gap} min de battement</div>`;
+    return `<div class="tl-gap ${slack < 8 ? "tight" : "ok"}">🚶 ~${walk} min à pied · ${gap} min de battement · partir au plus tard à ${leaveBy}</div>`;
+  }
+
   /* ---------- Timeline (partagée) ---------- */
   const kindNote = p => p.kind === "rencontre" ? "Rencontre publique" : (p.kind === "village" ? "Village du FARSe" : "");
 
@@ -147,6 +169,17 @@
       const arr = [...perfs].sort((a, b) => a.startMin - b.startMin);
       for (let i = 0; i < arr.length; i++) for (let j = i + 1; j < arr.length; j++) {
         if (arr[j].startMin < (arr[i].endMin ?? arr[i].startMin + 60)) { overlaps.add(arr[i].id); overlaps.add(arr[j].id); }
+      }
+    }
+    // battements entre étapes consécutives (Mon parcours uniquement)
+    const gapAfter = {};
+    if (removable) {
+      for (let i = 0; i < times.length - 1; i++) {
+        const prevs = groups[times[i]].filter(p => p.endMin != null);
+        if (!prevs.length) continue;
+        const prev = prevs.reduce((a, b) => a.endMin >= b.endMin ? a : b);
+        const next = groups[times[i + 1]][0];
+        gapAfter[times[i]] = gapHTML(prev.endMin, next.startMin, prev.venue, next.venue);
       }
     }
     return times.map(t => `<div class="tl-group">
@@ -165,7 +198,7 @@
           </div>
           ${removable && overlaps.has(p.id) ? `<div class="n" style="color:var(--warn)">⚠️ Chevauchement avec un autre créneau</div>` : ""}
         </div>`;
-      }).join("")}</div>
+      }).join("")}${gapAfter[t] || ""}</div>
     </div>`).join("");
   }
 
@@ -453,25 +486,36 @@
     if (!pc) return closeSheet();
     const d = dayById[pc.day];
     const root = $("#sheet-root");
-    const rows = pc.items.map(it => {
+    const toMin = t => t ? +t.slice(0, 2) * 60 + +t.slice(3, 5) : null;
+    // étapes normalisées (heure de début/fin effective + lieu), pour les battements
+    const steps = pc.items.map(it => {
       if (it.custom) {
-        const v = venueById[it.custom.venueId];
-        return `<div class="tl-group"><div class="tl-time">${fmtTime(it.custom.start)}</div><div class="tl-items">
-          <div class="tl-card rencontre" ${it.custom.showId ? `data-show="${it.custom.showId}"` : ""}>
-            <div class="t">${esc(it.custom.label)}</div>
-            <div class="v">📍 ${esc(v.name)} · jusqu'à ${fmtTime(it.custom.end)}</div>
-          </div></div></div>`;
+        return { custom: it.custom, startMin: toMin(it.custom.start), endMin: toMin(it.custom.end), venue: venueById[it.custom.venueId] };
       }
       const p = perfById[it.perfId];
-      const start = it.start || p.time;
-      const end = it.end || (p.endMin != null ? `${String(Math.floor(p.endMin / 60)).padStart(2, "0")}:${String(p.endMin % 60).padStart(2, "0")}` : null);
-      const title = it.label || (p.kind === "rencontre" ? `Rencontre · ${p.show.title}` : p.show.title);
-      return `<div class="tl-group"><div class="tl-time">${fmtTime(start)}</div><div class="tl-items">
-        <div class="tl-card ${p.kind}" data-show="${p.showId}">
-          <div class="t">${esc(title)}${statusFlag(p.id)}</div>
-          <div class="v">📍 ${esc(p.venue.name)}${end ? " · jusqu'à " + fmtTime(end) : ""}</div>
-          <div class="tl-actions"><button class="${plan.has(p.id) ? "on" : ""}" data-plan="${p.id}">➕</button></div>
-        </div></div></div>`;
+      const startMin = it.start ? toMin(it.start) : p.startMin;
+      const endMin = it.end ? toMin(it.end) : p.endMin;
+      return { p, label: it.label, startMin, endMin, venue: p.venue };
+    });
+    const rows = steps.map((st, i) => {
+      const gap = i < steps.length - 1 ? gapHTML(st.endMin, steps[i + 1].startMin, st.venue, steps[i + 1].venue) : "";
+      const until = st.endMin != null ? ` · jusqu'à ${fmtMin(st.endMin)}` : "";
+      let card;
+      if (st.custom) {
+        card = `<div class="tl-card rencontre" ${st.custom.showId ? `data-show="${st.custom.showId}"` : ""}>
+            <div class="t">${esc(st.custom.label)}</div>
+            <div class="v">📍 ${esc(st.venue.name)}${until}</div>
+          </div>`;
+      } else {
+        const p = st.p;
+        const title = st.label || (p.kind === "rencontre" ? `Rencontre · ${p.show.title}` : p.show.title);
+        card = `<div class="tl-card ${p.kind}" data-show="${p.showId}">
+            <div class="t">${esc(title)}${statusFlag(p.id)}</div>
+            <div class="v">📍 ${esc(p.venue.name)}${until}</div>
+            <div class="tl-actions"><button class="${plan.has(p.id) ? "on" : ""}" data-plan="${p.id}">➕</button></div>
+          </div>`;
+      }
+      return `<div class="tl-group"><div class="tl-time">${fmtMin(st.startMin)}</div><div class="tl-items">${card}${gap}</div></div>`;
     }).join("");
     root.innerHTML = `
       <div class="sheet-backdrop" data-close></div>

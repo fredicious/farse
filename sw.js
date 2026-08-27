@@ -1,7 +1,7 @@
 /* FARSe 2026 — service worker : offline-first.
-   ec00a8a3 est remplacé par le SHA du commit au déploiement (voir deploy.yml) :
+   cabb2bcd est remplacé par le SHA du commit au déploiement (voir deploy.yml) :
    chaque mise en ligne invalide donc automatiquement l'ancien cache. */
-const VERSION = "farse-ec00a8a3";
+const VERSION = "farse-cabb2bcd";
 const TILES = "farse-tiles-v1";
 const SHELL = [
   "./",
