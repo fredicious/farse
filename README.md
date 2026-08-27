@@ -23,10 +23,11 @@ rencontres publiques et les 2 parcours recommandés (Famille / Intensif).
   des chevauchements, export calendrier (.ics), partage
 - ⚡ **Parcours FARSe** — les parcours officiels Famille & Intensif (samedi et
   dimanche), copiables dans « Mon parcours » en un bouton
-- 🔔 **Actualités** — retards / annulations / infos via `updates.json`, badge +
-  marquage « Retardé/Annulé » sur les représentations concernées, notifications
-  système (app ouverte). Voir [tools/facebook-sync](tools/facebook-sync/README.md)
-  pour le lien avec la page Facebook du festival.
+- 🔔 **Actualités** — le fil de la page Facebook officielle du festival, intégré
+  dans l'app (plugin « Page » officiel, iframe sans SDK). C'est là que le festival
+  annonce retards et annulations. Nota : Facebook peut exiger d'être connecté pour
+  afficher le fil intégré (surtout en Europe) ; l'app propose alors un bouton
+  d'ouverture directe de la page.
 
 ## Déploiement (GitHub Pages)
 
@@ -43,13 +44,14 @@ push la met à jour automatiquement.
 Aucun build : c'est du HTML/CSS/JS statique (Leaflet vendorisé). En local :
 `python3 -m http.server` puis <http://localhost:8000>.
 
-## Publier une alerte pendant le festival
+## Alertes ciblées (optionnel, dormant)
 
-1. Ouvrir `admin.html` (déployé avec l'app) → composer l'actu → copier le JSON.
-2. Éditer `updates.json` sur GitHub (ça se fait très bien depuis un téléphone) et
-   coller l'objet dans le tableau `updates` → commit.
-3. Les apps la récupèrent en ≤ 5 minutes. Automatisation possible via VPS
-   (RSS-Bridge) : voir [tools/facebook-sync](tools/facebook-sync/README.md).
+En plus du fil Facebook intégré, l'app sonde `updates.json` (même origine) toutes
+les ~5 min. Le fichier est vide et rien ne s'affiche tant qu'il le reste — mais si
+un jour on veut marquer une représentation précise « Annulé / Retardé → 21h30 »
+partout dans l'app (timeline, fiches, parcours des amis), il suffit d'ajouter une
+entrée dans son tableau `updates` (format documenté dans le fichier) et de
+commiter : badge 🔔 + marquage automatique côté festivaliers.
 
 ## Notes sur les données
 
