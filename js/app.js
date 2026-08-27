@@ -369,27 +369,13 @@
         <p>${esc(INFOS.phone)} · <a href="mailto:${INFOS.email}">${esc(INFOS.email)}</a></p>
       </div>
       <div class="info-card">
-        <h3>🔔 Alertes & mises à jour</h3>
-        <p>L'app vérifie régulièrement les actualités du festival (retards, annulations) publiées par la page Facebook du FARSe et relayées ici. Vos favoris et votre parcours restent stockés sur votre téléphone.</p>
-        <div class="btn-row">
-          <button class="btn ghost" id="btn-check-updates">🔄 Vérifier maintenant</button>
-          <button class="btn ghost" id="btn-notif">🔔 Activer les notifications</button>
-        </div>
-        <p id="notif-state" style="font-size:12px;color:var(--muted)"></p>
+        <h3>🔔 Actualités</h3>
+        <p>Le bouton 🔔 en haut de l'app affiche le fil de la page Facebook officielle du festival (retards, annulations, infos de dernière minute). Vos favoris et votre parcours restent stockés uniquement sur votre téléphone.</p>
       </div>
       <p style="text-align:center;color:var(--muted);font-size:11.5px;margin:18px 0">
         App non-officielle réalisée à partir du programme officiel du FARSe 2026.<br>
         Positions des lieux approximatives — suivez la signalétique sur place.
       </p>`;
-    $("#btn-check-updates", el).addEventListener("click", () => fetchUpdates(true));
-    const nb = $("#btn-notif", el), ns = $("#notif-state", el);
-    const refreshNotifState = () => {
-      if (!("Notification" in window)) { nb.disabled = true; ns.textContent = "Notifications non prises en charge sur ce navigateur."; }
-      else if (Notification.permission === "granted") { nb.classList.add("hidden"); ns.textContent = "Notifications activées ✅ (quand l'app est ouverte)."; }
-      else if (Notification.permission === "denied") { ns.textContent = "Notifications refusées dans les réglages du navigateur."; }
-    };
-    refreshNotifState();
-    nb.addEventListener("click", async () => { await Notification.requestPermission(); refreshNotifState(); });
   }
 
   /* ---------- Fiche spectacle (sheet) ---------- */
@@ -508,7 +494,7 @@
     });
   }
 
-  /* ---------- Actualités / alertes (sheet) ---------- */
+  /* ---------- Actualités (fil Facebook du festival + alertes éventuelles) ---------- */
   function openUpdates() {
     const root = $("#sheet-root");
     updates.forEach(u => seenUpdates.add(u.id));
@@ -516,24 +502,38 @@
     refreshBadge();
     const fmtTs = ts => { try { return new Date(ts).toLocaleString("fr-FR", { weekday: "short", hour: "2-digit", minute: "2-digit" }); } catch { return ""; } };
     const list = [...updates].sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
+    // Plugin officiel « Page » de Facebook : iframe, sans SDK ni compte développeur.
+    const fbW = Math.min(500, Math.max(280, window.innerWidth - 32));
+    const fbSrc = "https://www.facebook.com/plugins/page.php?" + new URLSearchParams({
+      href: INFOS.facebook, tabs: "timeline", width: fbW, height: 620,
+      small_header: "true", hide_cover: "false", show_facepile: "false", locale: "fr_FR",
+    });
     root.innerHTML = `
       <div class="sheet-backdrop" data-close></div>
       <div class="sheet" role="dialog">
         <button class="sheet-close" data-close>✕</button>
         <div class="sheet-pad" style="padding-top:0">
           <div class="sheet-title">🔔 Actualités du festival</div>
-          <p style="color:var(--muted);font-size:12.5px">Retards, annulations et infos de dernière minute (relayés depuis la page Facebook du FARSe).</p>
-          <div class="btn-row"><button class="btn ghost" id="btn-refresh-updates">🔄 Actualiser</button></div>
-          <div class="updates-list">
+          <p style="color:var(--muted);font-size:12.5px">Le fil de la page Facebook officielle du FARSe — retards, annulations et infos de dernière minute y sont annoncés.</p>
+          ${list.length ? `<div class="updates-list">
             ${list.map(u => `<div class="u ${u.type || "info"}" ${u.showId ? `data-show="${u.showId}"` : ""}>
               <h4>${u.type === "cancel" ? "🚫" : u.type === "delay" ? "⏳" : "📣"} ${esc(u.title)}</h4>
               ${u.body ? `<p>${esc(u.body)}</p>` : ""}
               <div class="m">${fmtTs(u.ts)}${u.showId && showById[u.showId] ? " · " + esc(showById[u.showId].title) + " →" : ""}</div>
-            </div>`).join("") || `<div class="empty"><span class="big">😌</span>Aucune actualité pour le moment.<br>Tout se passe comme prévu !</div>`}
+            </div>`).join("")}
+          </div>` : ""}
+          <div class="fb-embed">
+            <iframe src="${fbSrc}" width="${fbW}" height="620" style="border:none;overflow:hidden;border-radius:12px;display:block;margin:0 auto;background:#fff"
+              scrolling="no" allowfullscreen loading="lazy"
+              allow="autoplay; clipboard-write; encrypted-media; picture-in-picture; web-share"></iframe>
+          </div>
+          <p style="color:var(--muted);font-size:12px;margin-top:10px">Le fil ne s'affiche pas ? Facebook demande parfois d'être connecté pour voir les publications intégrées (surtout en Europe, sans compte). Dans ce cas :</p>
+          <div class="btn-row">
+            <a class="btn ghost" href="${INFOS.facebook}" target="_blank" rel="noopener">📘 Ouvrir la page Facebook</a>
+            <a class="btn ghost" href="${INFOS.site}" target="_blank" rel="noopener">🌐 ete.strasbourg.eu</a>
           </div>
         </div>
       </div>`;
-    $("#btn-refresh-updates").addEventListener("click", () => fetchUpdates(true).then(openUpdates));
   }
 
   /* ---------- Flux updates.json ---------- */
