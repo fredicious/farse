@@ -24,7 +24,16 @@ const SHELL = [
 ];
 
 self.addEventListener("install", e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // cache: "reload" contourne le cache HTTP (GitHub Pages sert avec max-age=600),
+  // sinon une nouvelle version du SW peut re-cacher des fichiers périmés.
+  e.waitUntil(
+    caches.open(VERSION).then(c => Promise.all(
+      SHELL.map(u => fetch(new Request(u, { cache: "reload" })).then(r => {
+        if (!r.ok) throw new Error(u + " " + r.status);
+        return c.put(u, r);
+      }))
+    )).then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener("activate", e => {
