@@ -3,7 +3,7 @@
   "short_name": "FARSe 2026",
   "description": "Programme interactif du Festival des Arts de la Rue de Strasbourg, 28–30 août 2026",
   "lang": "fr",
-  "start_url": "./index.html#/spectacles",
+  "start_url": "./index.html#/programme",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
