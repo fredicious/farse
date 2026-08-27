@@ -1,0 +1,5 @@
+{
+  "_doc": "Flux d'actualités de l'app FARSe 2026. Ajoutez des objets dans 'updates' pour publier retards/annulations/infos. type: 'info' | 'delay' | 'cancel'. 'perfIds' (facultatif) lie l'actu à des représentations précises (voir data/data.js) : elles seront marquées Retardé/Annulé partout dans l'app. 'showId' (facultatif) lie l'actu à un spectacle. 'newTime' (facultatif, ex. '21h30') affiche le nouvel horaire. Chaque update doit avoir un 'id' unique et stable.",
+  "generated": "2026-08-27T00:00:00+02:00",
+  "updates": []
+}

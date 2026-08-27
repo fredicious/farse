@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FARSe 2026 — éditeur d'actualités</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background:#14102b; color:#f3efff; max-width:640px; margin:0 auto; padding:16px; }
+    h1 { font-size:20px; } label { display:block; font-weight:700; margin:14px 0 4px; font-size:13px; }
+    input, select, textarea { width:100%; padding:10px; border-radius:9px; border:1px solid #4a3d96; background:#251d52; color:#fff; font:inherit; box-sizing:border-box; }
+    textarea { min-height:70px; }
+    button { margin-top:16px; padding:12px 18px; border:none; border-radius:10px; background:linear-gradient(135deg,#8a2bd6,#ff3d8a); color:#fff; font-weight:800; font-size:15px; cursor:pointer; }
+    pre { background:#0c0920; padding:12px; border-radius:10px; overflow:auto; font-size:12px; white-space:pre-wrap; }
+    .hint { color:#b3a9e0; font-size:12.5px; }
+    .perfs { max-height:180px; overflow:auto; background:#251d52; border:1px solid #4a3d96; border-radius:9px; padding:8px; }
+    .perfs label { font-weight:400; margin:2px 0; font-size:12.5px; display:flex; gap:8px; align-items:center; }
+    .perfs input { width:auto; }
+  </style>
+</head>
+<body>
+  <h1>🔔 Éditeur d'actualités FARSe</h1>
+  <p class="hint">Composez une actu (retard, annulation, info), puis copiez le JSON généré dans le fichier <code>updates.json</code> du dépôt (modifiable directement depuis GitHub sur téléphone). L'app des festivaliers la récupère en quelques minutes.</p>
+
+  <label>Type</label>
+  <select id="type">
+    <option value="info">📣 Info</option>
+    <option value="delay">⏳ Retard</option>
+    <option value="cancel">🚫 Annulation</option>
+  </select>
+
+  <label>Spectacle concerné (facultatif)</label>
+  <select id="show"><option value="">— aucun en particulier —</option></select>
+
+  <label>Représentations concernées (facultatif — marque « Retardé/Annulé » dans l'app)</label>
+  <div class="perfs" id="perfs"><em class="hint">Choisissez d'abord un spectacle.</em></div>
+
+  <label>Nouvel horaire (facultatif, ex. « 21h30 »)</label>
+  <input id="newTime" placeholder="21h30">
+
+  <label>Titre</label>
+  <input id="title" placeholder="Ex. : Mirage retardé de 30 min ce soir">
+
+  <label>Message (facultatif)</label>
+  <textarea id="body" placeholder="Détails, source (post Facebook du FARSe)…"></textarea>
+
+  <button id="gen">Générer le JSON</button>
+  <h3>À coller dans <code>updates.json</code> → tableau <code>updates</code> :</h3>
+  <pre id="out">…</pre>
+  <button id="copy">📋 Copier</button>
+
+  <script src="data/data.js"></script>
+  <script>
+    const { SHOWS, PERFS, dayById } = window.FARSE;
+    const showSel = document.getElementById("show");
+    for (const s of SHOWS) showSel.insertAdjacentHTML("beforeend", `<option value="${s.id}">${s.title}</option>`);
+    showSel.addEventListener("change", () => {
+      const box = document.getElementById("perfs");
+      const list = PERFS.filter(p => p.showId === showSel.value);
+      box.innerHTML = list.map(p =>
+        `<label><input type="checkbox" value="${p.id}"> ${dayById[p.day].short} ${p.time.replace(":", "h")} — ${p.venue.name}${p.kind === "rencontre" ? " (rencontre)" : ""}</label>`
+      ).join("") || '<em class="hint">Choisissez d\'abord un spectacle.</em>';
+    });
+    document.getElementById("gen").addEventListener("click", () => {
+      const perfIds = [...document.querySelectorAll("#perfs input:checked")].map(i => i.value);
+      const u = {
+        id: "u-" + Date.now().toString(36),
+        ts: new Date().toISOString(),
+        type: document.getElementById("type").value,
+        title: document.getElementById("title").value.trim(),
+      };
+      const body = document.getElementById("body").value.trim();
+      const newTime = document.getElementById("newTime").value.trim();
+      if (body) u.body = body;
+      if (showSel.value) u.showId = showSel.value;
+      if (perfIds.length) u.perfIds = perfIds;
+      if (newTime) u.newTime = newTime;
+      document.getElementById("out").textContent = JSON.stringify(u, null, 2) + ",";
+    });
+    document.getElementById("copy").addEventListener("click", () =>
+      navigator.clipboard.writeText(document.getElementById("out").textContent));
+  </script>
+</body>
+</html>

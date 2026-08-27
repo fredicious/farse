@@ -1,0 +1,653 @@
+/* FARSe 2026 — application (vanilla JS, offline-first) */
+(() => {
+  const { DAYS, VENUES, SHOWS, PERFS, PARCOURS, INFOS, showById, venueById, perfById, dayById } = window.FARSE;
+
+  /* ---------- Utils ---------- */
+  const $ = (sel, el = document) => el.querySelector(sel);
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const norm = s => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const fmtTime = t => t.replace(":", "h");
+  const fmtDur = m => m == null ? "" : (m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? String(m % 60).padStart(2, "0") : ""}` : `${m} min`);
+  const toast = msg => {
+    const t = document.createElement("div");
+    t.className = "toast"; t.textContent = msg;
+    $("#toast-root").appendChild(t);
+    setTimeout(() => t.remove(), 2300);
+  };
+
+  /* ---------- Local storage (offline-first, tout reste sur l'appareil) ---------- */
+  const store = {
+    get(k, dflt) { try { const v = localStorage.getItem("farse:" + k); return v == null ? dflt : JSON.parse(v); } catch { return dflt; } },
+    set(k, v) { try { localStorage.setItem("farse:" + k, JSON.stringify(v)); } catch {} },
+  };
+  let favs = new Set(store.get("favs", []));
+  let plan = new Set(store.get("plan", []));            // perfIds de « Mon parcours »
+  let seenUpdates = new Set(store.get("seenUpdates", []));
+  let updates = store.get("updates", []);                // dernier flux connu
+  const saveFavs = () => store.set("favs", [...favs]);
+  const savePlan = () => store.set("plan", [...plan]);
+
+  /* ---------- Statut des représentations (flux d'actualités) ---------- */
+  // perfId -> {type:'cancel'|'delay', newTime?, title}
+  const perfStatus = () => {
+    const m = {};
+    for (const u of updates) {
+      if (!u.perfIds || (u.type !== "cancel" && u.type !== "delay")) continue;
+      for (const pid of u.perfIds) m[pid] = { type: u.type, newTime: u.newTime, title: u.title };
+    }
+    return m;
+  };
+  let statusMap = perfStatus();
+
+  const statusFlag = pid => {
+    const s = statusMap[pid];
+    if (!s) return "";
+    if (s.type === "cancel") return ` <span class="status-flag cancel">Annulé</span>`;
+    return ` <span class="status-flag delay">Retardé${s.newTime ? " → " + esc(s.newTime) : ""}</span>`;
+  };
+
+  /* ---------- Favoris & parcours ---------- */
+  const toggleFav = id => {
+    if (favs.has(id)) { favs.delete(id); toast("Retiré des favoris"); }
+    else { favs.add(id); toast("❤️ Ajouté aux favoris"); }
+    saveFavs(); rerender();
+  };
+  const togglePlan = pid => {
+    if (plan.has(pid)) { plan.delete(pid); toast("Retiré de mon parcours"); }
+    else { plan.add(pid); toast("➕ Ajouté à mon parcours"); }
+    savePlan(); rerender();
+  };
+
+  /* ---------- Navigation (Google Maps + géo) ---------- */
+  const navUrl = v => {
+    const q = encodeURIComponent(`${v.name}, ${v.id === 21 ? "Ostwald" : "Strasbourg"}`);
+    return `https://www.google.com/maps/dir/?api=1&destination=${q}&travelmode=walking`;
+  };
+
+  /* ---------- Rendu : cartes spectacle ---------- */
+  const genreClass = g => ({ danse: "g-danse", cirque: "g-cirque", theatre: "g-theatre", musique: "g-musique", village: "g-village" }[g] || "");
+  const PLACEHOLDERS = { cirque: "🎪", danse: "💃", theatre: "🎭", musique: "🎵", village: "🎨" };
+
+  const timePills = show => {
+    const byDay = {};
+    for (const p of show.perfs) (byDay[p.day] ??= []).push(p);
+    return DAYS.filter(d => byDay[d.id]).map(d => {
+      const times = byDay[d.id].map(p => {
+        const s = statusMap[p.id];
+        return `<span class="time-pill${s?.type === "cancel" ? " cancelled" : ""}"><span class="d">${esc(d.short)}</span>${fmtTime(p.time)}${p.note && p.day === "jeu" ? " (Ostwald)" : ""}</span>`;
+      });
+      return times.join("");
+    }).join("");
+  };
+
+  const showCard = show => {
+    const img = show.img
+      ? `<img class="show-thumb" src="${show.img}" alt="" loading="lazy">`
+      : `<div class="show-thumb ph">${PLACEHOLDERS[show.group] || "🎪"}</div>`;
+    const meta = [fmtDur(show.duration), show.audience].filter(Boolean).join(" · ");
+    return `<article class="show-card" data-show="${show.id}">
+      ${img}
+      <div class="show-body">
+        <span class="genre-tag ${genreClass(show.group)}">${esc(show.genre)}</span>
+        <div class="show-title">${esc(show.title)}</div>
+        <div class="show-co">${esc(show.company)}</div>
+        ${meta ? `<div class="show-meta">${esc(meta)}</div>` : ""}
+        <div class="times-row">${timePills(show)}</div>
+      </div>
+      <button class="fav-btn ${favs.has(show.id) ? "on" : ""}" data-fav="${show.id}" aria-label="Favori">❤️</button>
+    </article>`;
+  };
+
+  /* ---------- Vue : Spectacles ---------- */
+  let searchQ = store.get("searchQ", "");
+  let filterChip = "all";
+
+  function viewSpectacles(el) {
+    const chips = [
+      ["all", "Tous"], ["ven", "Ven 28"], ["sam", "Sam 29"], ["dim", "Dim 30"],
+      ["danse", "Danse"], ["cirque", "Cirque"], ["theatre", "Théâtre"], ["musique", "Musique"], ["village", "Village"],
+    ];
+    const q = norm(searchQ);
+    const matches = s => {
+      if (q && !(norm(s.title).includes(q) || norm(s.company).includes(q) || norm(s.genre).includes(q)
+        || s.venueIds.some(v => norm(venueById[v].name).includes(q)))) return false;
+      if (filterChip === "all") return true;
+      if (dayById[filterChip]) return s.perfs.some(p => p.day === filterChip);
+      return s.group === filterChip;
+    };
+    const main = SHOWS.filter(s => s.group !== "village" && matches(s));
+    const village = SHOWS.filter(s => s.group === "village" && matches(s));
+
+    el.className = "view";
+    el.innerHTML = `
+      <h1 class="page">Spectacles</h1>
+      <div class="searchbar">🔍<input id="search" type="search" placeholder="Chercher un spectacle, une compagnie, un lieu…" value="${esc(searchQ)}" autocomplete="off"></div>
+      <div class="chips">${chips.map(([id, l]) => `<button class="chip ${filterChip === id ? "on" : ""}" data-chip="${id}">${l}</button>`).join("")}</div>
+      ${main.map(showCard).join("") || (village.length ? "" : `<div class="empty"><span class="big">🫥</span>Aucun résultat pour cette recherche.</div>`)}
+      ${village.length ? `<h2 class="section">Au Village du FARSe</h2>${village.map(showCard).join("")}` : ""}
+    `;
+    $("#search", el).addEventListener("input", e => {
+      searchQ = e.target.value; store.set("searchQ", searchQ);
+      clearTimeout(viewSpectacles._t);
+      viewSpectacles._t = setTimeout(() => { viewSpectacles(el); const i = $("#search", el); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 200);
+    });
+    el.querySelectorAll("[data-chip]").forEach(b => b.addEventListener("click", () => { filterChip = b.dataset.chip; viewSpectacles(el); }));
+  }
+
+  /* ---------- Timeline (partagée) ---------- */
+  const kindNote = p => p.kind === "rencontre" ? "Rencontre publique" : (p.kind === "village" ? "Village du FARSe" : "");
+
+  function timelineHTML(perfs, { removable = false } = {}) {
+    const groups = {};
+    for (const p of perfs) (groups[p.time] ??= []).push(p);
+    const times = Object.keys(groups).sort();
+    // détection de chevauchements (pour Mon parcours)
+    const overlaps = new Set();
+    if (removable) {
+      const arr = [...perfs].sort((a, b) => a.startMin - b.startMin);
+      for (let i = 0; i < arr.length; i++) for (let j = i + 1; j < arr.length; j++) {
+        if (arr[j].startMin < (arr[i].endMin ?? arr[i].startMin + 60)) { overlaps.add(arr[i].id); overlaps.add(arr[j].id); }
+      }
+    }
+    return times.map(t => `<div class="tl-group">
+      <div class="tl-time">${fmtTime(t)}</div>
+      <div class="tl-items">${groups[t].map(p => {
+        const title = p.kind === "rencontre" ? `Rencontre · ${p.show.title}` : p.show.title;
+        return `<div class="tl-card ${p.kind}" data-show="${p.showId}">
+          <div class="t">${esc(title)}${statusFlag(p.id)}</div>
+          <div class="v">📍 ${esc(p.venue.name)} · ${fmtDur(p.duration) || "en continu"}</div>
+          ${p.note ? `<div class="n">${esc(p.note)}</div>` : (kindNote(p) ? `<div class="n">${kindNote(p)}</div>` : "")}
+          <div class="tl-actions">
+            ${removable
+              ? `<button class="remove-x" data-unplan="${p.id}" aria-label="Retirer">✕</button>`
+              : `<button class="${plan.has(p.id) ? "on" : ""}" data-plan="${p.id}" aria-label="Mon parcours">➕</button>
+                 <button class="${favs.has(p.showId) ? "on" : ""}" data-fav="${p.showId}" aria-label="Favori">❤️</button>`}
+          </div>
+          ${removable && overlaps.has(p.id) ? `<div class="n" style="color:var(--warn)">⚠️ Chevauchement avec un autre créneau</div>` : ""}
+        </div>`;
+      }).join("")}</div>
+    </div>`).join("");
+  }
+
+  /* ---------- Vue : Programme ---------- */
+  let curDay = store.get("curDay", null) || (() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return (DAYS.find(d => d.date === today) || DAYS[1]).id;
+  })();
+
+  function viewProgramme(el) {
+    const day = dayById[curDay] || DAYS[1];
+    const perfs = PERFS.filter(p => p.day === day.id).sort((a, b) => a.startMin - b.startMin);
+    const today = new Date().toISOString().slice(0, 10);
+    const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+
+    let html = `<h1 class="page">Programme</h1>
+      <div class="day-tabs">${DAYS.map(d => `<button class="day-tab ${d.id === curDay ? "on" : ""}" data-day="${d.id}">${d.short}${d.pre ? "*" : ""}</button>`).join("")}</div>`;
+    if (day.pre) html += `<p style="color:var(--muted);font-size:12.5px;margin:-6px 2px 12px">* Avant le FARSe — avant-première à Ostwald.</p>`;
+
+    if (day.date === today) {
+      const before = perfs.filter(p => p.startMin <= nowMin);
+      const after = perfs.filter(p => p.startMin > nowMin);
+      html += timelineHTML(before) + `<div class="now-line">MAINTENANT · ${String(Math.floor(nowMin / 60)).padStart(2, "0")}h${String(nowMin % 60).padStart(2, "0")}</div>` + timelineHTML(after);
+    } else {
+      html += timelineHTML(perfs);
+    }
+    el.className = "view";
+    el.innerHTML = html;
+    el.querySelectorAll("[data-day]").forEach(b => b.addEventListener("click", () => { curDay = b.dataset.day; store.set("curDay", curDay); viewProgramme(el); }));
+  }
+
+  /* ---------- Vue : Carte ---------- */
+  let mainMap = null, focusVenue = null;
+
+  function viewCarte(el) {
+    el.className = "view full";
+    el.innerHTML = `<div id="map"></div>`;
+    // Leaflet a besoin d'un conteneur affiché
+    requestAnimationFrame(() => {
+      mainMap = L.map("map", { zoomControl: false }).setView([48.5805, 7.7550], 14);
+      L.control.zoom({ position: "bottomright" }).addTo(mainMap);
+      addTiles(mainMap);
+      const bounds = [];
+      for (const v of VENUES) {
+        const icon = L.divIcon({ className: "", html: `<div class="venue-pin ${v.id === 20 ? "village-pin" : ""}">${v.id === 20 ? "V" : v.id === 21 ? "O" : v.id}</div>`, iconSize: [30, 30], iconAnchor: [15, 28] });
+        const m = L.marker([v.lat, v.lng], { icon }).addTo(mainMap);
+        m.bindPopup(venuePopup(v), { maxWidth: 260 });
+        if (!v.offMap) bounds.push([v.lat, v.lng]);
+        if (focusVenue === v.id) setTimeout(() => { mainMap.setView([v.lat, v.lng], 17); m.openPopup(); }, 150);
+      }
+      if (!focusVenue) mainMap.fitBounds(bounds, { padding: [30, 30] });
+      focusVenue = null;
+      mainMap.on("popupopen", e => bindShowLinks(e.popup.getElement()));
+    });
+  }
+
+  function venuePopup(v) {
+    const upcoming = PERFS.filter(p => p.venueId === v.id).sort((a, b) => a.date === b.date ? a.startMin - b.startMin : a.date < b.date ? -1 : 1);
+    const seen = new Set();
+    const lines = upcoming.filter(p => p.kind !== "rencontre").filter(p => !seen.has(p.showId) && seen.add(p.showId)).slice(0, 5)
+      .map(p => {
+        const s = p.show;
+        const days = DAYS.filter(d => s.perfs.some(x => x.day === d.id && x.venueId === v.id));
+        const times = days.map(d => `${d.short.split(" ")[0]} ${s.perfs.filter(x => x.day === d.id && x.venueId === v.id).map(x => fmtTime(x.time)).join("/")}`).join(" · ");
+        return `<a class="pop-show" href="#/show/${s.id}"><b>${esc(s.title)}</b><span class="pt">${times}</span></a>`;
+      }).join("");
+    return `<div class="pop-venue">${v.id <= 20 ? (v.id === 20 ? "🏕️ " : v.id + " · ") : ""}${esc(v.name)}</div>
+      ${v.access ? `<div class="pop-access">${esc(v.access)}</div>` : ""}
+      ${lines || `<div class="pop-access">Animations du Village en continu (12h–minuit)</div>`}
+      <a class="pop-nav" href="${navUrl(v)}" target="_blank" rel="noopener">🧭 Y aller</a>`;
+  }
+
+  function addTiles(map) {
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    }).addTo(map);
+  }
+
+  /* ---------- Vue : Mon FARSe ---------- */
+  let monTab = store.get("monTab", "plan");
+
+  function viewMonFarse(el) {
+    el.className = "view";
+    let body = "";
+    if (monTab === "favs") {
+      const list = SHOWS.filter(s => favs.has(s.id));
+      body = list.map(showCard).join("") ||
+        `<div class="empty"><span class="big">🤍</span>Aucun favori pour l'instant.<br>Touchez le ❤️ d'un spectacle pour le retrouver ici.</div>`;
+    } else if (monTab === "plan") {
+      const perfs = [...plan].map(id => perfById[id]).filter(Boolean);
+      if (!perfs.length) {
+        body = `<div class="empty"><span class="big">🗓️</span>Votre parcours est vide.<br>Ajoutez des créneaux avec le bouton ➕ depuis le programme ou la fiche d'un spectacle — ou copiez un parcours proposé par le festival.</div>`;
+      } else {
+        body = DAYS.filter(d => perfs.some(p => p.day === d.id)).map(d =>
+          `<h2 class="section">${d.long}</h2>` + timelineHTML(perfs.filter(p => p.day === d.id).sort((a, b) => a.startMin - b.startMin), { removable: true })
+        ).join("");
+        body += `<div class="btn-row">
+          <button class="btn ghost" id="btn-ics">📅 Exporter (.ics)</button>
+          <button class="btn ghost" id="btn-share">📤 Partager</button>
+        </div>`;
+      }
+    } else {
+      body = `<p style="color:var(--muted);font-size:13px;margin:2px 2px 12px">Deux parcours concoctés sur-mesure par le festival, pour samedi et dimanche.</p>` +
+        PARCOURS.map(pc => {
+          const d = dayById[pc.day];
+          return `<div class="parcours-card" data-parcours="${pc.id}">
+            <h3>${pc.icon} Parcours ${esc(pc.name)} · ${esc(d.short)}</h3>
+            <p>${esc(pc.blurb)}</p>
+            <p style="margin-top:6px;color:var(--accent2);font-weight:700">${pc.items.length} étapes · voir le détail →</p>
+          </div>`;
+        }).join("");
+    }
+    el.innerHTML = `
+      <h1 class="page">Mon FARSe</h1>
+      <div class="seg">
+        <button data-seg="plan" class="${monTab === "plan" ? "on" : ""}">Mon parcours</button>
+        <button data-seg="favs" class="${monTab === "favs" ? "on" : ""}">Favoris</button>
+        <button data-seg="official" class="${monTab === "official" ? "on" : ""}">Parcours FARSe</button>
+      </div>${body}`;
+    el.querySelectorAll("[data-seg]").forEach(b => b.addEventListener("click", () => { monTab = b.dataset.seg; store.set("monTab", monTab); viewMonFarse(el); }));
+    $("#btn-ics", el)?.addEventListener("click", exportICS);
+    $("#btn-share", el)?.addEventListener("click", sharePlan);
+  }
+
+  /* ---------- Export / partage du parcours ---------- */
+  function exportICS() {
+    const perfs = [...plan].map(id => perfById[id]).filter(Boolean).sort((a, b) => a.date === b.date ? a.startMin - b.startMin : a.date < b.date ? -1 : 1);
+    const dt = (date, min) => date.replace(/-/g, "") + "T" + String(Math.floor(min / 60)).padStart(2, "0") + String(min % 60).padStart(2, "0") + "00";
+    const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//FARSe 2026//FR", "CALSCALE:GREGORIAN"];
+    for (const p of perfs) {
+      lines.push("BEGIN:VEVENT",
+        `UID:${p.id}@farse2026`,
+        `DTSTART;TZID=Europe/Paris:${dt(p.date, p.startMin)}`,
+        `DTEND;TZID=Europe/Paris:${dt(p.date, p.endMin ?? p.startMin + 60)}`,
+        `SUMMARY:${(p.kind === "rencontre" ? "Rencontre · " : "") + p.show.title.replace(/([,;])/g, "\\$1")}`,
+        `LOCATION:${(p.venue.name + ", Strasbourg").replace(/([,;])/g, "\\$1")}`,
+        "END:VEVENT");
+    }
+    lines.push("END:VCALENDAR");
+    const blob = new Blob([lines.join("\r\n")], { type: "text/calendar" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = "mon-parcours-farse-2026.ics";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }
+
+  function sharePlan() {
+    const perfs = [...plan].map(id => perfById[id]).filter(Boolean).sort((a, b) => a.date === b.date ? a.startMin - b.startMin : a.date < b.date ? -1 : 1);
+    const txt = "Mon parcours FARSe 2026 :\n" + perfs.map(p =>
+      `• ${dayById[p.day].short} ${fmtTime(p.time)} — ${p.kind === "rencontre" ? "Rencontre · " : ""}${p.show.title} (${p.venue.name})`).join("\n") +
+      `\n\n${location.origin}${location.pathname}`;
+    if (navigator.share) navigator.share({ title: "Mon parcours FARSe 2026", text: txt }).catch(() => {});
+    else { navigator.clipboard?.writeText(txt); toast("Parcours copié 📋"); }
+  }
+
+  /* ---------- Vue : Infos ---------- */
+  function viewInfos(el) {
+    el.className = "view";
+    el.innerHTML = `
+      <h1 class="page">Infos pratiques</h1>
+      <div class="info-card">
+        <h3>🎪 ${esc(INFOS.festival)}</h3>
+        <p>${esc(INFOS.dates)} — spectacles <b>gratuits</b>, dans l'espace public.</p>
+        <p><a href="${INFOS.site}" target="_blank" rel="noopener">ete.strasbourg.eu</a> · <a href="${INFOS.facebook}" target="_blank" rel="noopener">Facebook ${esc(INFOS.hashtag)}</a></p>
+      </div>
+      <div class="info-card">
+        <h3>🏕️ ${esc(INFOS.village.name)}</h3>
+        <p><b>${esc(INFOS.village.where)}</b><br>${esc(INFOS.village.hours)}</p>
+        <p>${esc(INFOS.village.blurb)}</p>
+      </div>
+      <div class="info-card">
+        <h3>ℹ️ Le Point info</h3>
+        <p><b>${esc(INFOS.pointInfo.where)}</b></p>
+        <ul>${INFOS.pointInfo.hours.map(h => `<li>${esc(h)}</li>`).join("")}</ul>
+      </div>
+      <div class="info-card">
+        <h3>🤝 Rencontres publiques</h3>
+        <p>${esc(INFOS.rencontres)}</p>
+        <ul>
+          <li>Sam 29 · 18h30 — Cie Les Chaussons Rouges (aire de jeu du Jura)</li>
+          <li>Sam 29 · 20h15 — Intrepidus Squad (place Saint-Pierre-le-Jeune)</li>
+          <li>Dim 30 · 11h — Cie Joshua Monten (cour de l'école Schoepflin)</li>
+          <li>Dim 30 · 18h15 — Joan Català (place Hans-Jean Arp)</li>
+        </ul>
+      </div>
+      <div class="info-card">
+        <h3>♿ Accessibilité & sur place</h3>
+        <ul>${INFOS.access.map(a => `<li>${esc(a)}</li>`).join("")}</ul>
+      </div>
+      <div class="info-card">
+        <h3>🎒 Les indispensables</h3>
+        <ul>${INFOS.tips.map(a => `<li>${esc(a)}</li>`).join("")}</ul>
+      </div>
+      <div class="info-card">
+        <h3>🎪 Actions de médiation</h3>
+        <p>${esc(INFOS.mediation)}</p>
+      </div>
+      <div class="info-card">
+        <h3>📞 Contact</h3>
+        <p>${esc(INFOS.phone)} · <a href="mailto:${INFOS.email}">${esc(INFOS.email)}</a></p>
+      </div>
+      <div class="info-card">
+        <h3>🔔 Alertes & mises à jour</h3>
+        <p>L'app vérifie régulièrement les actualités du festival (retards, annulations) publiées par la page Facebook du FARSe et relayées ici. Vos favoris et votre parcours restent stockés sur votre téléphone.</p>
+        <div class="btn-row">
+          <button class="btn ghost" id="btn-check-updates">🔄 Vérifier maintenant</button>
+          <button class="btn ghost" id="btn-notif">🔔 Activer les notifications</button>
+        </div>
+        <p id="notif-state" style="font-size:12px;color:var(--muted)"></p>
+      </div>
+      <p style="text-align:center;color:var(--muted);font-size:11.5px;margin:18px 0">
+        App non-officielle réalisée à partir du programme officiel du FARSe 2026.<br>
+        Positions des lieux approximatives — suivez la signalétique sur place.
+      </p>`;
+    $("#btn-check-updates", el).addEventListener("click", () => fetchUpdates(true));
+    const nb = $("#btn-notif", el), ns = $("#notif-state", el);
+    const refreshNotifState = () => {
+      if (!("Notification" in window)) { nb.disabled = true; ns.textContent = "Notifications non prises en charge sur ce navigateur."; }
+      else if (Notification.permission === "granted") { nb.classList.add("hidden"); ns.textContent = "Notifications activées ✅ (quand l'app est ouverte)."; }
+      else if (Notification.permission === "denied") { ns.textContent = "Notifications refusées dans les réglages du navigateur."; }
+    };
+    refreshNotifState();
+    nb.addEventListener("click", async () => { await Notification.requestPermission(); refreshNotifState(); });
+  }
+
+  /* ---------- Fiche spectacle (sheet) ---------- */
+  let miniMap = null;
+
+  function openShow(id) {
+    const s = showById[id];
+    if (!s) return closeSheet();
+    const root = $("#sheet-root");
+    const perfLine = p => {
+      const st = statusMap[p.id];
+      return `<div class="perf-line">
+        <div class="when">
+          <b>${dayById[p.day].long} · ${fmtTime(p.time)}${statusFlag(p.id)}</b>
+          <span>📍 ${esc(p.venue.name)}${p.duration ? " · " + fmtDur(p.duration) : ""}</span>
+          ${p.note ? `<span class="note">${esc(p.note)}</span>` : ""}
+        </div>
+        <button class="add-parcours ${plan.has(p.id) ? "on" : ""}" data-plan="${p.id}">${plan.has(p.id) ? "✓ Parcours" : "+ Parcours"}</button>
+      </div>`;
+    };
+    const venues = s.venueIds.map(v => venueById[v]);
+    const v0 = venues[0];
+    const alerts = updates.filter(u => u.showId === s.id || (u.perfIds || []).some(pid => perfById[pid]?.showId === s.id));
+    root.innerHTML = `
+      <div class="sheet-backdrop" data-close></div>
+      <div class="sheet" role="dialog" aria-label="${esc(s.title)}">
+        <button class="sheet-close" data-close>✕</button>
+        ${s.img ? `<img class="sheet-hero" src="${s.img}" alt="">` : `<div class="sheet-hero ph">${PLACEHOLDERS[s.group] || "🎪"}</div>`}
+        <div class="sheet-pad">
+          <button class="sheet-fav ${favs.has(s.id) ? "on" : ""}" data-fav="${s.id}" aria-label="Favori">❤️</button>
+          <span class="genre-tag ${genreClass(s.group)}">${esc(s.genre)}</span>
+          <div class="sheet-title">${esc(s.title)}</div>
+          <div class="sheet-co">${esc(s.company)}</div>
+          <div class="facts">
+            ${s.duration ? `<span class="fact">⏱ ${fmtDur(s.duration)}</span>` : ""}
+            ${s.audience ? `<span class="fact">👥 ${esc(s.audience)}</span>` : ""}
+            <span class="fact">🎟 Gratuit</span>
+          </div>
+          ${alerts.map(u => `<div class="alert-box ${u.type}">${u.type === "cancel" ? "🚫" : u.type === "delay" ? "⏳" : "📣"} <b>${esc(u.title)}</b>${u.body ? `<br>${esc(u.body)}` : ""}</div>`).join("")}
+          <h2 class="section">Horaires</h2>
+          ${s.perfs.map(perfLine).join("")}
+          ${s.meets.length ? `<h2 class="section">Rencontre avec les artistes</h2>${s.meets.map(perfLine).join("")}` : ""}
+          <h2 class="section">Lieu${venues.length > 1 ? "x" : ""}</h2>
+          ${venues.map(v => `<div class="venue-line"><b style="color:var(--text)">📍 ${esc(v.name)}</b>${v.access ? " — " + esc(v.access) : ""}</div>`).join("")}
+          <div id="mini-map" class="mini-map"></div>
+          <div class="btn-row">
+            <a class="btn" href="${navUrl(v0)}" target="_blank" rel="noopener">🧭 Y aller</a>
+            <button class="btn ghost" data-carte="${v0.id}">🗺️ Voir la carte</button>
+          </div>
+          <h2 class="section">Le spectacle</h2>
+          <p class="desc">${esc(s.description)}</p>
+          ${s.credit ? `<p class="credit">Photo : ${esc(s.credit)}</p>` : ""}
+        </div>
+      </div>`;
+    requestAnimationFrame(() => {
+      const mm = $("#mini-map");
+      if (!mm) return;
+      miniMap = L.map(mm, { zoomControl: false, dragging: false, scrollWheelZoom: false, tap: false });
+      addTiles(miniMap);
+      const pts = venues.map(v => {
+        const icon = L.divIcon({ className: "", html: `<div class="venue-pin">${v.id === 20 ? "V" : v.id === 21 ? "O" : v.id}</div>`, iconSize: [30, 30], iconAnchor: [15, 28] });
+        L.marker([v.lat, v.lng], { icon }).addTo(miniMap);
+        return [v.lat, v.lng];
+      });
+      if (pts.length > 1) miniMap.fitBounds(pts, { padding: [40, 40] });
+      else miniMap.setView(pts[0], 16);
+      mm.addEventListener("click", () => { focusVenue = v0.id; location.hash = "#/carte"; });
+    });
+    root.querySelectorAll("[data-carte]").forEach(b => b.addEventListener("click", () => { focusVenue = +b.dataset.carte; location.hash = "#/carte"; }));
+  }
+
+  /* ---------- Parcours officiel (sheet) ---------- */
+  function openParcours(id) {
+    const pc = PARCOURS.find(p => p.id === id);
+    if (!pc) return closeSheet();
+    const d = dayById[pc.day];
+    const root = $("#sheet-root");
+    const rows = pc.items.map(it => {
+      if (it.custom) {
+        const v = venueById[it.custom.venueId];
+        return `<div class="tl-group"><div class="tl-time">${fmtTime(it.custom.start)}</div><div class="tl-items">
+          <div class="tl-card rencontre" ${it.custom.showId ? `data-show="${it.custom.showId}"` : ""}>
+            <div class="t">${esc(it.custom.label)}</div>
+            <div class="v">📍 ${esc(v.name)} · jusqu'à ${fmtTime(it.custom.end)}</div>
+          </div></div></div>`;
+      }
+      const p = perfById[it.perfId];
+      const start = it.start || p.time;
+      const end = it.end || (p.endMin != null ? `${String(Math.floor(p.endMin / 60)).padStart(2, "0")}:${String(p.endMin % 60).padStart(2, "0")}` : null);
+      const title = it.label || (p.kind === "rencontre" ? `Rencontre · ${p.show.title}` : p.show.title);
+      return `<div class="tl-group"><div class="tl-time">${fmtTime(start)}</div><div class="tl-items">
+        <div class="tl-card ${p.kind}" data-show="${p.showId}">
+          <div class="t">${esc(title)}${statusFlag(p.id)}</div>
+          <div class="v">📍 ${esc(p.venue.name)}${end ? " · jusqu'à " + fmtTime(end) : ""}</div>
+          <div class="tl-actions"><button class="${plan.has(p.id) ? "on" : ""}" data-plan="${p.id}">➕</button></div>
+        </div></div></div>`;
+    }).join("");
+    root.innerHTML = `
+      <div class="sheet-backdrop" data-close></div>
+      <div class="sheet" role="dialog">
+        <button class="sheet-close" data-close>✕</button>
+        <div class="sheet-pad" style="padding-top:0">
+          <div class="sheet-title">${pc.icon} Parcours ${esc(pc.name)}</div>
+          <div class="sheet-co">${esc(d.long)} — proposé par le festival</div>
+          <p style="color:var(--muted);font-size:13px">${esc(pc.blurb)}</p>
+          <div class="btn-row"><button class="btn" id="btn-copy-parcours">➕ Tout ajouter à mon parcours</button></div>
+          ${rows}
+        </div>
+      </div>`;
+    $("#btn-copy-parcours").addEventListener("click", () => {
+      let n = 0;
+      for (const it of pc.items) if (it.perfId && !plan.has(it.perfId)) { plan.add(it.perfId); n++; }
+      savePlan();
+      toast(n ? `${n} créneaux ajoutés à mon parcours` : "Déjà dans votre parcours");
+      openParcours(id); rerenderBase();
+    });
+  }
+
+  /* ---------- Actualités / alertes (sheet) ---------- */
+  function openUpdates() {
+    const root = $("#sheet-root");
+    updates.forEach(u => seenUpdates.add(u.id));
+    store.set("seenUpdates", [...seenUpdates]);
+    refreshBadge();
+    const fmtTs = ts => { try { return new Date(ts).toLocaleString("fr-FR", { weekday: "short", hour: "2-digit", minute: "2-digit" }); } catch { return ""; } };
+    const list = [...updates].sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
+    root.innerHTML = `
+      <div class="sheet-backdrop" data-close></div>
+      <div class="sheet" role="dialog">
+        <button class="sheet-close" data-close>✕</button>
+        <div class="sheet-pad" style="padding-top:0">
+          <div class="sheet-title">🔔 Actualités du festival</div>
+          <p style="color:var(--muted);font-size:12.5px">Retards, annulations et infos de dernière minute (relayés depuis la page Facebook du FARSe).</p>
+          <div class="btn-row"><button class="btn ghost" id="btn-refresh-updates">🔄 Actualiser</button></div>
+          <div class="updates-list">
+            ${list.map(u => `<div class="u ${u.type || "info"}" ${u.showId ? `data-show="${u.showId}"` : ""}>
+              <h4>${u.type === "cancel" ? "🚫" : u.type === "delay" ? "⏳" : "📣"} ${esc(u.title)}</h4>
+              ${u.body ? `<p>${esc(u.body)}</p>` : ""}
+              <div class="m">${fmtTs(u.ts)}${u.showId && showById[u.showId] ? " · " + esc(showById[u.showId].title) + " →" : ""}</div>
+            </div>`).join("") || `<div class="empty"><span class="big">😌</span>Aucune actualité pour le moment.<br>Tout se passe comme prévu !</div>`}
+          </div>
+        </div>
+      </div>`;
+    $("#btn-refresh-updates").addEventListener("click", () => fetchUpdates(true).then(openUpdates));
+  }
+
+  /* ---------- Flux updates.json ---------- */
+  async function fetchUpdates(manual = false) {
+    try {
+      const res = await fetch(`updates.json?t=${Date.now()}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+      const fresh = Array.isArray(data.updates) ? data.updates : [];
+      const newOnes = fresh.filter(u => !seenUpdates.has(u.id));
+      updates = fresh;
+      store.set("updates", updates);
+      statusMap = perfStatus();
+      refreshBadge();
+      if (newOnes.length) {
+        rerenderBase();
+        notify(newOnes);
+        if (manual) toast(`${newOnes.length} nouvelle(s) actualité(s)`);
+      } else if (manual) toast("Aucune nouveauté — tout est à jour ✅");
+    } catch {
+      if (manual) toast("Impossible de vérifier (hors-ligne ?)");
+    }
+  }
+
+  function refreshBadge() {
+    const n = updates.filter(u => !seenUpdates.has(u.id)).length;
+    const b = $("#updates-badge");
+    b.textContent = n;
+    b.classList.toggle("hidden", n === 0);
+  }
+
+  async function notify(newOnes) {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    for (const u of newOnes.slice(0, 3)) {
+      const title = (u.type === "cancel" ? "🚫 " : u.type === "delay" ? "⏳ " : "📣 ") + u.title;
+      try {
+        const reg = await navigator.serviceWorker?.getRegistration();
+        if (reg) reg.showNotification(title, { body: u.body || "", icon: "icons/icon-192.png", tag: u.id });
+        else new Notification(title, { body: u.body || "" });
+      } catch {}
+    }
+  }
+
+  /* ---------- Router ---------- */
+  const VIEWS = { spectacles: viewSpectacles, programme: viewProgramme, carte: viewCarte, monfarse: viewMonFarse, infos: viewInfos };
+  let baseRoute = "spectacles";
+
+  function closeSheet() {
+    $("#sheet-root").innerHTML = "";
+    if (miniMap) { miniMap.remove(); miniMap = null; }
+  }
+
+  function route() {
+    const h = location.hash.replace(/^#\/?/, "");
+    const [seg, arg] = h.split("/");
+    closeSheet();
+    const ensureBase = () => { if (!$("#view").firstChild) renderBase(); };
+    if (seg === "show" && arg) { ensureBase(); openShow(arg); }
+    else if (seg === "parcours" && arg) { ensureBase(); openParcours(arg); }
+    else if (seg === "updates") { ensureBase(); openUpdates(); }
+    else {
+      baseRoute = VIEWS[seg] ? seg : "spectacles";
+      renderBase();
+    }
+    document.querySelectorAll(".tabbar a").forEach(a => a.classList.toggle("active", a.dataset.tab === baseRoute));
+  }
+
+  function renderBase() {
+    if (mainMap) { mainMap.remove(); mainMap = null; }
+    VIEWS[baseRoute]($("#view"));
+  }
+  // re-rendu léger après un changement d'état (favori, parcours, updates)
+  function rerenderBase() { if (!mainMap) renderBase(); }
+  function rerender() {
+    const sheetOpen = $("#sheet-root").innerHTML !== "";
+    if (!sheetOpen) return renderBase();
+    // met à jour les boutons de la fiche ouverte sans la re-créer
+    document.querySelectorAll("[data-fav]").forEach(b => b.classList.toggle("on", favs.has(b.dataset.fav)));
+    document.querySelectorAll("[data-plan]").forEach(b => {
+      const on = plan.has(b.dataset.plan);
+      b.classList.toggle("on", on);
+      if (b.classList.contains("add-parcours")) b.textContent = on ? "✓ Parcours" : "+ Parcours";
+    });
+  }
+
+  /* ---------- Délégation d'événements globale ---------- */
+  document.addEventListener("click", e => {
+    const closeEl = e.target.closest("[data-close]");
+    if (closeEl) { history.length > 1 ? history.back() : (location.hash = "#/" + baseRoute); return; }
+    const fav = e.target.closest("[data-fav]");
+    if (fav) { e.stopPropagation(); toggleFav(fav.dataset.fav); return; }
+    const pl = e.target.closest("[data-plan]");
+    if (pl) { e.stopPropagation(); togglePlan(pl.dataset.plan); return; }
+    const un = e.target.closest("[data-unplan]");
+    if (un) { e.stopPropagation(); plan.delete(un.dataset.unplan); savePlan(); toast("Retiré de mon parcours"); renderBase(); return; }
+    const pc = e.target.closest("[data-parcours]");
+    if (pc) { location.hash = "#/parcours/" + pc.dataset.parcours; return; }
+    const sc = e.target.closest("[data-show]");
+    if (sc && !e.target.closest("a")) { location.hash = "#/show/" + sc.dataset.show; return; }
+  });
+  $("#btn-updates").addEventListener("click", () => { location.hash = "#/updates"; });
+
+  function bindShowLinks() { /* liens des popups Leaflet : gérés par le hash naturellement */ }
+
+  /* ---------- Init ---------- */
+  window.addEventListener("hashchange", route);
+  if (!location.hash) location.replace("#/spectacles");
+  route();
+  refreshBadge();
+  fetchUpdates();
+  setInterval(() => { if (!document.hidden) fetchUpdates(); }, 5 * 60 * 1000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) fetchUpdates(); });
+
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+  }
+})();
