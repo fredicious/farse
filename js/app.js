@@ -22,6 +22,8 @@
   };
   let favs = new Set(store.get("favs", []));
   let plan = new Set(store.get("plan", []));            // perfIds de « Mon parcours »
+  let savedParcours = store.get("savedParcours", []);   // parcours nommés [{id, name, ids, ts}]
+  const saveSavedParcours = () => store.set("savedParcours", savedParcours);
   let seenUpdates = new Set(store.get("seenUpdates", []));
   let updates = store.get("updates", []);                // dernier flux connu
   const saveFavs = () => store.set("favs", [...favs]);
@@ -324,7 +326,8 @@
         body += `<div class="btn-row">
           <button class="btn ghost" id="btn-ics">📅 Exporter (.ics)</button>
           <button class="btn ghost" id="btn-share">📤 Partager</button>
-        </div>`;
+        </div>
+        <div class="btn-row"><button class="btn ghost" id="btn-save-plan">💾 Enregistrer sous…</button></div>`;
       }
     } else {
       body = `<p style="color:var(--muted);font-size:13px;margin:2px 2px 12px">Deux parcours concoctés sur-mesure par le festival, pour samedi et dimanche.</p>` +
@@ -336,17 +339,31 @@
             <p style="margin-top:6px;color:var(--accent2);font-weight:700">${pc.items.length} étapes · voir le détail →</p>
           </div>`;
         }).join("");
+      if (savedParcours.length) {
+        body += `<h2 class="section">Mes parcours enregistrés</h2>` +
+          savedParcours.map(sp => `<div class="parcours-card" data-saved="${sp.id}">
+            <h3>💾 ${esc(sp.name)}</h3>
+            <p>${sp.ids.length} créneau${sp.ids.length > 1 ? "x" : ""} · enregistré le ${new Date(sp.ts).toLocaleDateString("fr-FR")}</p>
+          </div>`).join("");
+      }
     }
     el.innerHTML = `
       <h1 class="page">Mon FARSe</h1>
       <div class="seg">
         <button data-seg="plan" class="${monTab === "plan" ? "on" : ""}">Mon parcours</button>
         <button data-seg="favs" class="${monTab === "favs" ? "on" : ""}">Favoris</button>
-        <button data-seg="official" class="${monTab === "official" ? "on" : ""}">Parcours FARSe</button>
+        <button data-seg="official" class="${monTab === "official" ? "on" : ""}">Parcours</button>
       </div>${body}`;
     el.querySelectorAll("[data-seg]").forEach(b => b.addEventListener("click", () => { monTab = b.dataset.seg; store.set("monTab", monTab); viewMonFarse(el); }));
     $("#btn-ics", el)?.addEventListener("click", exportICS);
     $("#btn-share", el)?.addEventListener("click", sharePlan);
+    $("#btn-save-plan", el)?.addEventListener("click", () => {
+      const name = (window.prompt("Nom de ce parcours ?", "Mon parcours FARSe") || "").trim();
+      if (!name) return;
+      savedParcours.push({ id: "sp-" + Date.now().toString(36), name, ids: [...plan], ts: Date.now() });
+      saveSavedParcours();
+      toast(`💾 « ${name} » enregistré`);
+    });
   }
 
   /* ---------- Export / partage du parcours ---------- */
@@ -371,15 +388,24 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   }
 
-  function sharePlan() {
-    const perfs = [...plan].map(id => perfById[id]).filter(Boolean).sort((a, b) => a.date === b.date ? a.startMin - b.startMin : a.date < b.date ? -1 : 1);
+  const sortPerfs = perfs => [...perfs].sort((a, b) => a.date === b.date ? a.startMin - b.startMin : a.date < b.date ? -1 : 1);
+  const parcoursBody = perfs => DAYS.filter(d => perfs.some(p => p.day === d.id)).map(d =>
+    `<h2 class="section">${d.long}</h2>` + timelineHTML(perfs.filter(p => p.day === d.id).sort((a, b) => a.startMin - b.startMin))
+  ).join("");
+
+  function shareParcoursLink(perfs, title) {
     // tout l'état du parcours vit dans l'URL : liste d'ids de représentations
     const url = `${location.origin}${location.pathname}#/p/${perfs.map(p => p.id).join(",")}`;
-    const txt = "Mon parcours FARSe 2026 :\n" + perfs.map(p =>
+    const txt = `${title} :\n` + perfs.map(p =>
       `• ${dayById[p.day].short} ${fmtTime(p.time)} — ${p.kind === "rencontre" ? "Rencontre · " : ""}${p.show.title} (${p.venue.name})`).join("\n");
-    if (navigator.share) navigator.share({ title: "Mon parcours FARSe 2026", text: txt, url }).catch(() => {});
+    if (navigator.share) navigator.share({ title, text: txt, url }).catch(() => {});
     else { navigator.clipboard?.writeText(`${txt}\n\n${url}`); toast("Lien du parcours copié 📋"); }
   }
+
+  function sharePlan() {
+    sharePerfsOfPlan();
+  }
+  const sharePerfsOfPlan = () => shareParcoursLink(sortPerfs([...plan].map(id => perfById[id]).filter(Boolean)), "Mon parcours FARSe 2026");
 
   /* ---------- Parcours partagé (état porté par l'URL, #/p/id1,id2,…) ---------- */
   function openSharedParcours(idsStr) {
@@ -387,10 +413,6 @@
     const perfs = ids.map(id => perfById[id]).filter(Boolean);
     const unknown = ids.length - perfs.length;
     const root = $("#sheet-root");
-    const body = DAYS.filter(d => perfs.some(p => p.day === d.id)).map(d =>
-      `<h2 class="section">${d.long}</h2>` +
-      timelineHTML(perfs.filter(p => p.day === d.id).sort((a, b) => a.startMin - b.startMin))
-    ).join("");
     root.innerHTML = `
       <div class="sheet-backdrop" data-close></div>
       <div class="sheet" role="dialog">
@@ -400,7 +422,11 @@
           <div class="sheet-co">${perfs.length} créneau${perfs.length > 1 ? "x" : ""} — envoyé par un·e ami·e</div>
           ${unknown ? `<p style="color:var(--warn);font-size:12.5px">⚠️ ${unknown} créneau(x) du lien n'ont pas été reconnus (lien tronqué ?).</p>` : ""}
           ${perfs.length
-            ? `<div class="btn-row"><button class="btn" id="btn-adopt-parcours">➕ Tout ajouter à mon parcours</button></div>${body}`
+            ? `<div class="btn-row"><button class="btn" id="btn-adopt-parcours">➕ Tout ajouter à mon parcours</button></div>
+               <div class="save-row">
+                 <input id="save-name" placeholder="Nom (ex. Samedi avec Léa)" maxlength="40" autocomplete="off">
+                 <button class="btn ghost" id="btn-save-parcours">💾 Enregistrer</button>
+               </div>${parcoursBody(perfs)}`
             : `<div class="empty"><span class="big">🤷</span>Ce lien ne contient aucun créneau lisible.</div>`}
         </div>
       </div>`;
@@ -409,6 +435,54 @@
       for (const p of perfs) if (!plan.has(p.id)) { plan.add(p.id); n++; }
       savePlan();
       toast(n ? `${n} créneau(x) ajoutés à mon parcours` : "Déjà tout dans votre parcours");
+      location.hash = "#/monfarse";
+    });
+    $("#btn-save-parcours")?.addEventListener("click", () => {
+      const name = $("#save-name").value.trim() || `Parcours partagé du ${new Date().toLocaleDateString("fr-FR")}`;
+      savedParcours.push({ id: "sp-" + Date.now().toString(36), name, ids: perfs.map(p => p.id), ts: Date.now() });
+      saveSavedParcours();
+      monTab = "official"; store.set("monTab", monTab);
+      toast(`💾 « ${name} » enregistré`);
+      location.hash = "#/monfarse";
+    });
+  }
+
+  /* ---------- Parcours enregistré sur l'appareil ---------- */
+  function openSavedParcours(id) {
+    const sp = savedParcours.find(s => s.id === id);
+    if (!sp) return closeSheet();
+    const perfs = sortPerfs(sp.ids.map(i => perfById[i]).filter(Boolean));
+    const root = $("#sheet-root");
+    root.innerHTML = `
+      <div class="sheet-backdrop" data-close></div>
+      <div class="sheet" role="dialog">
+        <button class="sheet-close" data-close>✕</button>
+        <div class="sheet-pad" style="padding-top:0">
+          <div class="sheet-title">💾 ${esc(sp.name)}</div>
+          <div class="sheet-co">${perfs.length} créneau${perfs.length > 1 ? "x" : ""} — enregistré sur cet appareil</div>
+          <div class="btn-row">
+            <button class="btn" id="btn-adopt-saved">➕ Tout ajouter à mon parcours</button>
+          </div>
+          <div class="btn-row">
+            <button class="btn ghost" id="btn-share-saved">📤 Partager</button>
+            <button class="btn ghost" id="btn-delete-saved" style="color:var(--danger)">🗑 Supprimer</button>
+          </div>
+          ${parcoursBody(perfs)}
+        </div>
+      </div>`;
+    $("#btn-adopt-saved").addEventListener("click", () => {
+      let n = 0;
+      for (const p of perfs) if (!plan.has(p.id)) { plan.add(p.id); n++; }
+      savePlan();
+      toast(n ? `${n} créneau(x) ajoutés à mon parcours` : "Déjà tout dans votre parcours");
+      location.hash = "#/monfarse";
+    });
+    $("#btn-share-saved").addEventListener("click", () => shareParcoursLink(perfs, sp.name));
+    $("#btn-delete-saved").addEventListener("click", () => {
+      if (!confirm(`Supprimer « ${sp.name} » ?`)) return;
+      savedParcours = savedParcours.filter(s => s.id !== sp.id);
+      saveSavedParcours();
+      toast("Parcours supprimé");
       location.hash = "#/monfarse";
     });
   }
@@ -705,6 +779,7 @@
     if (seg === "show" && arg) { ensureBase(); openShow(arg); }
     else if (seg === "parcours" && arg) { ensureBase(); openParcours(arg); }
     else if (seg === "p" && arg) { ensureBase(); openSharedParcours(arg); }
+    else if (seg === "saved" && arg) { ensureBase(); openSavedParcours(arg); }
     else if (seg === "updates") { ensureBase(); openUpdates(); }
     else {
       baseRoute = VIEWS[seg] ? seg : "programme";
@@ -743,6 +818,8 @@
     if (un) { e.stopPropagation(); plan.delete(un.dataset.unplan); savePlan(); toast("Retiré de mon parcours"); renderBase(); return; }
     const pc = e.target.closest("[data-parcours]");
     if (pc) { location.hash = "#/parcours/" + pc.dataset.parcours; return; }
+    const sv = e.target.closest("[data-saved]");
+    if (sv) { location.hash = "#/saved/" + sv.dataset.saved; return; }
     const sc = e.target.closest("[data-show]");
     if (sc && !e.target.closest("a")) { location.hash = "#/show/" + sc.dataset.show; return; }
   });
