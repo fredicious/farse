@@ -304,6 +304,13 @@ h2.section { font-size: 13px; text-transform: uppercase; letter-spacing: 1.2px; 
 .updates-list .u p { margin: 0; font-size: 13px; color: #ded7f5; white-space: pre-line; }
 .updates-list .u .m { font-size: 11px; color: var(--muted); margin-top: 5px; }
 
+.save-row { display: flex; gap: 8px; margin: 0 0 10px; }
+.save-row input {
+  flex: 1; min-width: 0; background: var(--card); border: 1px solid #3a2f79; border-radius: 12px;
+  padding: 10px 12px; color: var(--text); font-size: 14px; outline: none;
+}
+.save-row .btn { flex: 0 0 auto; }
+
 .fb-details { margin-top: 14px; }
 .fb-details summary {
   cursor: pointer; font-weight: 700; font-size: 13px; color: var(--muted);
