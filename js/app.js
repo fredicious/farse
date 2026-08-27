@@ -590,18 +590,28 @@
               <div class="m">${fmtTs(u.ts)}${u.showId && showById[u.showId] ? " · " + esc(showById[u.showId].title) + " →" : ""}</div>
             </div>`).join("")}
           </div>` : ""}
-          <div class="fb-embed">
-            <iframe src="${fbSrc}" width="${fbW}" height="620" style="border:none;overflow:hidden;border-radius:12px;display:block;margin:0 auto;background:#fff"
-              scrolling="no" allowfullscreen loading="lazy"
-              allow="autoplay; clipboard-write; encrypted-media; picture-in-picture; web-share"></iframe>
-          </div>
-          <p style="color:var(--muted);font-size:12px;margin-top:10px">Le fil ne s'affiche pas ? Facebook demande parfois d'être connecté pour voir les publications intégrées (surtout en Europe, sans compte). Dans ce cas :</p>
           <div class="btn-row">
-            <a class="btn ghost" href="${INFOS.facebook}" target="_blank" rel="noopener">📘 Ouvrir la page Facebook</a>
-            <a class="btn ghost" href="${INFOS.site}" target="_blank" rel="noopener">🌐 ete.strasbourg.eu</a>
+            <a class="btn" href="${INFOS.facebook}" target="_blank" rel="noopener">📘 Ouvrir la page Facebook</a>
           </div>
+          <div class="btn-row">
+            <a class="btn ghost" href="${INFOS.site}" target="_blank" rel="noopener">🌐 ete.strasbourg.eu (site officiel)</a>
+          </div>
+          <details class="fb-details">
+            <summary>Afficher le fil Facebook intégré</summary>
+            <p style="color:var(--muted);font-size:12px;margin:8px 0">En Europe, Facebook n'affiche le fil intégré que si vous êtes connecté·e à Facebook dans ce navigateur (règle de Meta, indépendante de l'app).</p>
+            <div class="fb-embed" data-fb-src="${esc(fbSrc)}" data-fb-w="${fbW}"></div>
+          </details>
         </div>
       </div>`;
+    // l'iframe n'est injectée qu'à l'ouverture du dépliant (inutile de charger Facebook sinon)
+    $(".fb-details", root).addEventListener("toggle", e => {
+      const box = $(".fb-embed", root);
+      if (e.target.open && box && !box.firstChild) {
+        box.innerHTML = `<iframe src="${box.dataset.fbSrc}" width="${box.dataset.fbW}" height="620"
+          style="border:none;overflow:hidden;border-radius:12px;display:block;margin:0 auto;background:#fff"
+          scrolling="no" allowfullscreen allow="autoplay; clipboard-write; encrypted-media; picture-in-picture; web-share"></iframe>`;
+      }
+    });
   }
 
   /* ---------- Flux updates.json ---------- */
