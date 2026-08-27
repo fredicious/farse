@@ -30,9 +30,15 @@ rencontres publiques et les 2 parcours recommandés (Famille / Intensif).
 
 ## Déploiement (GitHub Pages)
 
-Le workflow [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) déploie
-automatiquement à chaque push. Si le premier run échoue avec une erreur Pages :
-*Settings → Pages → Source : GitHub Actions*, puis relancer le workflow.
+Le workflow [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) publie le
+site sur la branche `gh-pages` à chaque push (elle existe déjà). **Une seule action
+manuelle, une seule fois** — GitHub ne permet pas de l'automatiser sans token admin :
+
+> **Settings → Pages → Build and deployment → Source : « Deploy from a branch » →
+> Branch : `gh-pages` / `/ (root)` → Save**
+
+L'app est ensuite en ligne sur **https://fredicious.github.io/farse/** et chaque
+push la met à jour automatiquement.
 
 Aucun build : c'est du HTML/CSS/JS statique (Leaflet vendorisé). En local :
 `python3 -m http.server` puis <http://localhost:8000>.
