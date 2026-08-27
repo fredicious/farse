@@ -298,6 +298,13 @@ h2.section { font-size: 13px; text-transform: uppercase; letter-spacing: 1.2px; 
 .updates-list .u p { margin: 0; font-size: 13px; color: #ded7f5; white-space: pre-line; }
 .updates-list .u .m { font-size: 11px; color: var(--muted); margin-top: 5px; }
 
+.fb-details { margin-top: 14px; }
+.fb-details summary {
+  cursor: pointer; font-weight: 700; font-size: 13px; color: var(--muted);
+  padding: 10px 12px; background: var(--card); border: 1px solid #3a2f79; border-radius: 12px;
+}
+.fb-details[open] summary { color: var(--text); }
+
 /* ---- Toast ---- */
 .toast {
   position: fixed; bottom: calc(var(--tabbar-h) + 12px); left: 50%; transform: translateX(-50%);
