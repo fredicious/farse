@@ -373,11 +373,44 @@
 
   function sharePlan() {
     const perfs = [...plan].map(id => perfById[id]).filter(Boolean).sort((a, b) => a.date === b.date ? a.startMin - b.startMin : a.date < b.date ? -1 : 1);
+    // tout l'état du parcours vit dans l'URL : liste d'ids de représentations
+    const url = `${location.origin}${location.pathname}#/p/${perfs.map(p => p.id).join(",")}`;
     const txt = "Mon parcours FARSe 2026 :\n" + perfs.map(p =>
-      `• ${dayById[p.day].short} ${fmtTime(p.time)} — ${p.kind === "rencontre" ? "Rencontre · " : ""}${p.show.title} (${p.venue.name})`).join("\n") +
-      `\n\n${location.origin}${location.pathname}`;
-    if (navigator.share) navigator.share({ title: "Mon parcours FARSe 2026", text: txt }).catch(() => {});
-    else { navigator.clipboard?.writeText(txt); toast("Parcours copié 📋"); }
+      `• ${dayById[p.day].short} ${fmtTime(p.time)} — ${p.kind === "rencontre" ? "Rencontre · " : ""}${p.show.title} (${p.venue.name})`).join("\n");
+    if (navigator.share) navigator.share({ title: "Mon parcours FARSe 2026", text: txt, url }).catch(() => {});
+    else { navigator.clipboard?.writeText(`${txt}\n\n${url}`); toast("Lien du parcours copié 📋"); }
+  }
+
+  /* ---------- Parcours partagé (état porté par l'URL, #/p/id1,id2,…) ---------- */
+  function openSharedParcours(idsStr) {
+    const ids = decodeURIComponent(idsStr || "").split(",").filter(Boolean);
+    const perfs = ids.map(id => perfById[id]).filter(Boolean);
+    const unknown = ids.length - perfs.length;
+    const root = $("#sheet-root");
+    const body = DAYS.filter(d => perfs.some(p => p.day === d.id)).map(d =>
+      `<h2 class="section">${d.long}</h2>` +
+      timelineHTML(perfs.filter(p => p.day === d.id).sort((a, b) => a.startMin - b.startMin))
+    ).join("");
+    root.innerHTML = `
+      <div class="sheet-backdrop" data-close></div>
+      <div class="sheet" role="dialog">
+        <button class="sheet-close" data-close>✕</button>
+        <div class="sheet-pad" style="padding-top:0">
+          <div class="sheet-title">🔗 Parcours partagé</div>
+          <div class="sheet-co">${perfs.length} créneau${perfs.length > 1 ? "x" : ""} — envoyé par un·e ami·e</div>
+          ${unknown ? `<p style="color:var(--warn);font-size:12.5px">⚠️ ${unknown} créneau(x) du lien n'ont pas été reconnus (lien tronqué ?).</p>` : ""}
+          ${perfs.length
+            ? `<div class="btn-row"><button class="btn" id="btn-adopt-parcours">➕ Tout ajouter à mon parcours</button></div>${body}`
+            : `<div class="empty"><span class="big">🤷</span>Ce lien ne contient aucun créneau lisible.</div>`}
+        </div>
+      </div>`;
+    $("#btn-adopt-parcours")?.addEventListener("click", () => {
+      let n = 0;
+      for (const p of perfs) if (!plan.has(p.id)) { plan.add(p.id); n++; }
+      savePlan();
+      toast(n ? `${n} créneau(x) ajoutés à mon parcours` : "Déjà tout dans votre parcours");
+      location.hash = "#/monfarse";
+    });
   }
 
   /* ---------- Vue : Infos ---------- */
@@ -671,6 +704,7 @@
     const ensureBase = () => { if (!$("#view").firstChild) renderBase(); };
     if (seg === "show" && arg) { ensureBase(); openShow(arg); }
     else if (seg === "parcours" && arg) { ensureBase(); openParcours(arg); }
+    else if (seg === "p" && arg) { ensureBase(); openSharedParcours(arg); }
     else if (seg === "updates") { ensureBase(); openUpdates(); }
     else {
       baseRoute = VIEWS[seg] ? seg : "programme";
