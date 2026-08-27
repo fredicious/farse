@@ -1,7 +1,7 @@
 /* FARSe 2026 — service worker : offline-first.
-   5a2752b6 est remplacé par le SHA du commit au déploiement (voir deploy.yml) :
+   cfdf7a4c est remplacé par le SHA du commit au déploiement (voir deploy.yml) :
    chaque mise en ligne invalide donc automatiquement l'ancien cache. */
-const VERSION = "farse-5a2752b6";
+const VERSION = "farse-cfdf7a4c";
 const TILES = "farse-tiles-v1";
 const SHELL = [
   "./",
@@ -24,7 +24,16 @@ const SHELL = [
 ];
 
 self.addEventListener("install", e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // cache: "reload" contourne le cache HTTP (GitHub Pages sert avec max-age=600),
+  // sinon une nouvelle version du SW peut re-cacher des fichiers périmés.
+  e.waitUntil(
+    caches.open(VERSION).then(c => Promise.all(
+      SHELL.map(u => fetch(new Request(u, { cache: "reload" })).then(r => {
+        if (!r.ok) throw new Error(u + " " + r.status);
+        return c.put(u, r);
+      }))
+    )).then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener("activate", e => {
