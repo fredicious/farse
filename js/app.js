@@ -80,21 +80,34 @@
     }).join("");
   };
 
-  const showCard = show => {
+  // Carte spectacle, partagée entre les vues.
+  // Sans opts : mode « Spectacles » (pastilles d'horaires). Avec opts.perf : mode
+  // « Programme / Mon parcours » (lieu à la place des horaires, bouton ➕ ou ✕).
+  const showCard = (show, opts = {}) => {
+    const p = opts.perf;
     const img = show.img
       ? `<img class="show-thumb" src="${show.img}" alt="" loading="lazy">`
       : `<div class="show-thumb ph">${PLACEHOLDERS[show.group] || "🎪"}</div>`;
-    const meta = [fmtDur(show.duration), show.audience].filter(Boolean).join(" · ");
-    return `<article class="show-card" data-show="${show.id}">
+    const meta = [fmtDur(p ? p.duration : show.duration) || (p && !p.duration ? "en continu" : ""), show.audience].filter(Boolean).join(" · ");
+    const title = p && p.kind === "rencontre" ? `Rencontre · ${show.title}` : show.title;
+    const bottom = p
+      ? `<div class="show-loc">📍 ${esc(p.venue.name)}</div>${p.note ? `<div class="show-note">${esc(p.note)}</div>` : ""}`
+      : `<div class="times-row">${timePills(show)}</div>`;
+    const actions = opts.removable
+      ? `<button class="remove-x" data-unplan="${p.id}" aria-label="Retirer">✕</button>`
+      : `<button class="${favs.has(show.id) ? "on" : ""}" data-fav="${show.id}" aria-label="Favori">❤️</button>` +
+        (p ? `<button class="${plan.has(p.id) ? "on" : ""}" data-plan="${p.id}" aria-label="Mon parcours">➕</button>` : "");
+    return `<article class="show-card${p ? " " + p.kind : ""}" data-show="${show.id}">
       ${img}
       <div class="show-body">
         <span class="genre-tag ${genreClass(show.group)}">${esc(show.genre)}</span>
-        <div class="show-title">${esc(show.title)}</div>
+        <div class="show-title">${esc(title)}${p ? statusFlag(p.id) : ""}</div>
         <div class="show-co">${esc(show.company)}</div>
         ${meta ? `<div class="show-meta">${esc(meta)}</div>` : ""}
-        <div class="times-row">${timePills(show)}</div>
+        ${bottom}
+        ${opts.warn ? `<div class="show-note" style="color:var(--warn)">⚠️ Chevauchement avec un autre créneau</div>` : ""}
       </div>
-      <button class="fav-btn ${favs.has(show.id) ? "on" : ""}" data-fav="${show.id}" aria-label="Favori">❤️</button>
+      <div class="card-actions">${actions}</div>
     </article>`;
   };
 
@@ -181,8 +194,6 @@
   }
 
   /* ---------- Timeline (partagée) ---------- */
-  const kindNote = p => p.kind === "rencontre" ? "Rencontre publique" : (p.kind === "village" ? "Village du FARSe" : "");
-
   function timelineHTML(perfs, { removable = false } = {}) {
     const groups = {};
     for (const p of perfs) (groups[p.time] ??= []).push(p);
@@ -208,21 +219,9 @@
     }
     return times.map(t => `<div class="tl-group">
       <div class="tl-time">${fmtTime(t)}</div>
-      <div class="tl-items">${groups[t].map(p => {
-        const title = p.kind === "rencontre" ? `Rencontre · ${p.show.title}` : p.show.title;
-        return `<div class="tl-card ${p.kind}" data-show="${p.showId}">
-          <div class="t">${esc(title)}${statusFlag(p.id)}</div>
-          <div class="v">📍 ${esc(p.venue.name)} · ${fmtDur(p.duration) || "en continu"}</div>
-          ${p.note ? `<div class="n">${esc(p.note)}</div>` : (kindNote(p) ? `<div class="n">${kindNote(p)}</div>` : "")}
-          <div class="tl-actions">
-            ${removable
-              ? `<button class="remove-x" data-unplan="${p.id}" aria-label="Retirer">✕</button>`
-              : `<button class="${plan.has(p.id) ? "on" : ""}" data-plan="${p.id}" aria-label="Mon parcours">➕</button>
-                 <button class="${favs.has(p.showId) ? "on" : ""}" data-fav="${p.showId}" aria-label="Favori">❤️</button>`}
-          </div>
-          ${removable && overlaps.has(p.id) ? `<div class="n" style="color:var(--warn)">⚠️ Chevauchement avec un autre créneau</div>` : ""}
-        </div>`;
-      }).join("")}${gapAfter[t] || ""}</div>
+      <div class="tl-items">${groups[t].map(p =>
+        showCard(p.show, { perf: p, removable, warn: removable && overlaps.has(p.id) })
+      ).join("")}${gapAfter[t] || ""}</div>
     </div>`).join("");
   }
 
