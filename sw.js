@@ -1,5 +1,7 @@
-/* FARSe 2026 — service worker : offline-first */
-const VERSION = "farse-v1";
+/* FARSe 2026 — service worker : offline-first.
+   __BUILD__ est remplacé par le SHA du commit au déploiement (voir deploy.yml) :
+   chaque mise en ligne invalide donc automatiquement l'ancien cache. */
+const VERSION = "farse-__BUILD__";
 const TILES = "farse-tiles-v1";
 const SHELL = [
   "./",
