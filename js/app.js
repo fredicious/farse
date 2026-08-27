@@ -151,9 +151,8 @@
     const walk = walkMin(vA, vB);
     if (!walk) return `<div class="tl-gap ok">⏱ ${gap} min de battement · même lieu</div>`;
     const slack = gap - walk;
-    const leaveBy = fmtMin(nextStart - walk);
     if (slack < 0) return `<div class="tl-gap bad">⚠️ Trop court : ~${walk} min à pied pour ${gap} min de battement</div>`;
-    return `<div class="tl-gap ${slack < 8 ? "tight" : "ok"}">🚶 ~${walk} min à pied · ${gap} min de battement · partir au plus tard à ${leaveBy}</div>`;
+    return `<div class="tl-gap ${slack < 8 ? "tight" : "ok"}">🚶 ~${walk} min à pied · ${gap} min de battement</div>`;
   }
 
   /* ---------- Timeline (partagée) ---------- */
