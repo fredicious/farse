@@ -380,7 +380,7 @@ window.FARSE = (() => {
     festival: "FARSe 2026 — Le Festival des Arts de la Rue de Strasbourg",
     dates: "Du 28 au 30 août 2026",
     site: "https://ete.strasbourg.eu",
-    facebook: "https://www.facebook.com/Festivalfarse",
+    facebook: "https://www.facebook.com/festival.farse.strasbourg",
     facebookName: "Festival FARSe de Strasbourg",
     hashtag: "#FARSe",
     phone: "03 68 98 68 69",
